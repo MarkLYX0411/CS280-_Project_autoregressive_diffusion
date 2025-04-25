@@ -1,5 +1,5 @@
 import torch
-from model import *
+from Unet import *
 from typing import *
 from train_utils import *
 import matplotlib as plt
