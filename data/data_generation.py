@@ -107,12 +107,12 @@ def render_to_pixel_array(frame, coordinate_range, canvas_size=(256, 256), line_
     gray = 0.299 * pixel_array[:, :, 0] + 0.587 * pixel_array[:, :, 1] + 0.114 * pixel_array[:, :, 2]
     
     # Threshold to binary (0 and 1)
-    binary = (gray > 128).astype(np.uint8)
+    binary = (gray < 128).astype(np.uint8)
     
     plt.close(fig)
     
     return binary
-
+    
 def drawing_to_pixel_frames(drawing, num_frames, canvas_size=(256, 256), line_width=3):
     vector_frames = drawing_to_vector_frames(drawing, num_frames)
     coordinate_range = find_coordinate_range(drawing)
@@ -131,7 +131,7 @@ def drawing_to_pixel_frames(drawing, num_frames, canvas_size=(256, 256), line_wi
     return pixel_frames
         
 def create_animation_from_pixel_frames(pixel_frames, output_file="animation.mp4", fps=10):
-    height, width, _ = pixel_frames[0].shape
+    height, width = pixel_frames[0].shape
     dpi = 100
     fig = plt.Figure(figsize=(width/dpi, height/dpi), dpi=dpi)
     ax = fig.add_subplot(1, 1, 1)
@@ -140,7 +140,7 @@ def create_animation_from_pixel_frames(pixel_frames, output_file="animation.mp4"
     def update(frame_idx):
         ax.clear()
         ax.axis('off')
-        ax.imshow(pixel_frames[frame_idx])
+        ax.imshow(pixel_frames[frame_idx], cmap='binary')
         return ax,
 
     ani = animation.FuncAnimation(fig, update, frames=len(pixel_frames), interval=1000/fps, blit=True)
