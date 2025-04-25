@@ -66,8 +66,7 @@ def drawing_to_vector_frames(drawing, num_frames):
     
     return frames
 
-def render_to_pixel_array(frame, coordinate_range, canvas_size=(256, 256), line_width=3, 
-                         bg_color=(255, 255, 255), fg_colors=None, dpi=100):
+def render_to_pixel_array(frame, coordinate_range, canvas_size=(256, 256), line_width=3, dpi=100):
     fig_width = canvas_size[0] / dpi
     fig_height = canvas_size[1] / dpi
     fig = plt.Figure(figsize=(fig_width, fig_height), dpi=dpi)
@@ -76,23 +75,17 @@ def render_to_pixel_array(frame, coordinate_range, canvas_size=(256, 256), line_
     canvas = FigureCanvasAgg(fig)
     ax = fig.add_subplot(1, 1, 1)
     
-    # Set background color
-    fig.patch.set_facecolor([c/255 for c in bg_color])
-    ax.set_facecolor([c/255 for c in bg_color])
+    # Set background to white (1 in binary)
+    ax.set_facecolor('white')
+    fig.patch.set_facecolor('white')
     
     # Set limits based on the coordinate range of the entire drawing
     min_x, max_x, min_y, max_y = coordinate_range
     ax.set_xlim(min_x, max_x)
     ax.set_ylim(min_y, max_y)
     
-    # Create a colormap for consistent stroke colors
-    if fg_colors is None:
-        fg_colors = plt.cm.tab10.colors
-    
-    # Plot each stroke
+    # Plot each stroke in black (0 in binary)
     for stroke in frame:
-        stroke_idx = stroke['stroke_idx']
-
         # Check if the stroke has points
         if len(stroke['x']) > 0:
             ax.plot(stroke['x'], stroke['y'], color='black', linewidth=line_width)
@@ -109,12 +102,16 @@ def render_to_pixel_array(frame, coordinate_range, canvas_size=(256, 256), line_
     buf = canvas.buffer_rgba()
     pixel_array = np.asarray(buf).copy()
     
-    # Convert RGBA to RGB
-    pixel_array_rgb = pixel_array[:, :, :3]
+    # Convert to binary (0 for black, 1 for white)
+    # First convert to grayscale
+    gray = 0.299 * pixel_array[:, :, 0] + 0.587 * pixel_array[:, :, 1] + 0.114 * pixel_array[:, :, 2]
+    
+    # Threshold to binary (0 and 1)
+    binary = (gray > 128).astype(np.uint8)
     
     plt.close(fig)
     
-    return pixel_array_rgb
+    return binary
 
 def drawing_to_pixel_frames(drawing, num_frames, canvas_size=(256, 256), line_width=3):
     vector_frames = drawing_to_vector_frames(drawing, num_frames)
@@ -192,6 +189,8 @@ def generate_npz(categories, size=10, num_frames=60, image_size=(256, 256), line
                         test_labels.append(category_idx)
                         
                     count += 1
+        
+        print(f"Finished processing {category} with {count} samples.")
 
     train_images = np.array(train_images, dtype=np.uint8)
     train_labels = np.array(train_labels, dtype=np.uint8)
