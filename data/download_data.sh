@@ -18,7 +18,7 @@ categories=(
 base_url="https://storage.googleapis.com/quickdraw_dataset/full/raw"
 
 # Number of drawings to download for each category
-num_drawings=1500
+num_drawings=15000
 
 for category in "${categories[@]}"; do
   echo "Downloading first $num_drawings drawings of $category.ndjson..."

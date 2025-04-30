@@ -197,7 +197,7 @@ def generate_npz(categories, size=10, num_frames=60, image_size=(256, 256), line
     test_images = np.array(test_images, dtype=np.uint8)
     test_labels = np.array(test_labels, dtype=np.uint8)
 
-    np.savez('quickdraw.npz', 
+    np.savez('quickdraw_10k.npz', 
             train_images=train_images, train_labels=train_labels,
             valid_images=valid_images, valid_labels=valid_labels,
             test_images=test_images, test_labels=test_labels)
@@ -205,7 +205,7 @@ def generate_npz(categories, size=10, num_frames=60, image_size=(256, 256), line
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate QuickDraw dataset')
     parser.add_argument('--categories', nargs='+', default=['apple', 'cat', 'cloud', 'computer', 'diamond', 'moon', 'mushroom', 'snowflake', 'star'], help='List of categories')
-    parser.add_argument('--size', type=int, default=1000, help='Number of training samples')
+    parser.add_argument('--size', type=int, default=10000, help='Number of training samples')
     parser.add_argument('--frames', type=int, default=60, help='Number of frames per animation')
     parser.add_argument('--width', type=int, default=256, help='Image width')
     parser.add_argument('--height', type=int, default=256, help='Image height')
