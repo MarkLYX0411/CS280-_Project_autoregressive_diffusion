@@ -6,26 +6,30 @@ import matplotlib as plt
 from tqdm import tqdm
 from dataset import QuickDrawDataset
 from GRU import HistoryEncoder
+import os
 
-def train_fm_cond(fm_model, epoch, lr, train_dataloader, val_dataloader, device, in_channel, gradient_clip = 0):
-  optimizer = torch.optim.Adam(fm_model.unet.parameters(), lr=lr)
+def train_fm_cond(fm_model, epoch, lr, train_dataloader, val_dataloader, device, in_channel, gradient_clip = 0, save_path = './checkpoints'):
+  optimizer = torch.optim.Adam(fm_model.parameters(), lr=lr) #train the whole model
   scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma= 0.89)
   model = fm_model.to(device)
   train_loss = []
-
+  chunk_size = 12
+  best_loss = float('inf')
+  best_model = None
+  save_freq = 10
+  validating = False
+  
   for ep in range(epoch):
     print(f"Epoch {ep+1}/{epoch}")
     model.train()
     epoch_loss = 0.0
     batch_count = 0
-    # 遍历数据加载器，video形状为[batch_size, frames, H, W]
+    #video shape: (batch_size, frames, H, W)
     for video, labels in tqdm(train_dataloader):
       video = video.to(device)
       labels = labels.to(device)
       batch_size = video.size(0)
       
-      # 确定要处理的块数量
-      chunk_size = 12  # 每个块的帧数
       num_frames = video.size(1)
       num_chunks = num_frames // chunk_size
       
@@ -52,24 +56,41 @@ def train_fm_cond(fm_model, epoch, lr, train_dataloader, val_dataloader, device,
         batch_count += 1
         
         loss.backward()
+        
+
         if gradient_clip > 0:
           torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=gradient_clip)
+
         optimizer.step()
         optimizer.zero_grad()
+
+        #detach the h_state to avoid double backprop
+        h_state = h_state.detach()
     
     # 打印本轮训练的平均损失
     avg_epoch_loss = epoch_loss / max(batch_count, 1)
     print(f"Epoch {ep+1} average loss: {avg_epoch_loss:.6f}")
     
     # 验证和可视化
-    print("Validating...")
-    val_loss = validate_and_visualize(model, val_dataloader, in_channel, 
+    if validating:
+      print("Validating...")
+      val_loss = validate_and_visualize(model, val_dataloader, in_channel, 
                                      device=device,
                                      autoregressive_steps=0, 
                                      visualization=(ep % 5 == 0))
-    print(f"Validation loss: {val_loss:.6f}")
+      print(f"Validation loss: {val_loss:.6f}")
+    
+      if val_loss < best_loss:
+        best_loss = val_loss
+        best_model = model.state_dict()
+    
+    if (ep + 1) % save_freq == 0:
+      torch.save(model.state_dict(), os.path.join(save_path, f'model_{ep+1}.pth'))
     
     scheduler.step()
+  
+  if best_model:
+    torch.save(best_model, os.path.join(save_path, 'best_model.pth'))
 
   # 绘制训练损失曲线
   import matplotlib.pyplot as plt
@@ -130,9 +151,13 @@ def train_fm_cond(fm_model, epoch, lr, train_dataloader, val_dataloader, device,
 #   plt.yscale('log')
 
 
+
+## TODO: this function is currently buggy
+## TODO (1) use `autoregressive_sample` to generate the video, then compute MSE on val data, use the first 12 frames as x_p
 def validate_and_visualize(model, val_dataloader, in_channel, autoregressive_steps = 0, visualization = False):
     losses = []
     loss_f = torch.nn.MSELoss()
+    chunk_size = 12
 
     for image, x_p, c in tqdm(val_dataloader):
       out = model.sample(c, x_p, (x_p.size(-2), x_p.size(-1)))
@@ -163,7 +188,7 @@ def validate_and_visualize(model, val_dataloader, in_channel, autoregressive_ste
       ###
 
       for _ in range(autoregressive_steps):
-        x_p = torch.cat((x_p, out), dim = 1)[:, in_channel: , : , :]
+        x_p = torch.cat((x_p, out), dim = 1)[:, -in_channel * chunk_size: , : , :]
         out = model.sample(c, x_p, (x_p.size(-2), x_p.size(-1)))
 
         ### Visualization 
@@ -198,7 +223,7 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
     
     # 数据路径
-    data_path = '/home/yujunwei/CS280-_Project_autoregressive_diffusuon/quickdraw_1k.npz'
+    data_path = 'data/quickdraw_1k.npz'
     
     # 创建数据加载器
     batch_size = 8

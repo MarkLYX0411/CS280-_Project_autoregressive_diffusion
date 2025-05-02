@@ -26,8 +26,7 @@ def fm_forward(
     unet.train()
     GRU.train()
     device = next(unet.parameters()).device
-    loss_f = nn.MSELoss()
-
+    c_masked = c.clone()
     noise = torch.randn_like(x_1).to(device)
     time_sample = torch.rand((x_1.size(0), 1)).to(device)
     time = time_sample.reshape(-1, 1, 1, 1)
@@ -36,11 +35,11 @@ def fm_forward(
     random_number = torch.rand(()).item()
     if random_number < p_uncond:
       mask = torch.zeros_like(c)
-      c = c * mask
+      c_masked = c_masked * mask
 
     h_vec, h_next = GRU(x_p, h)
-    predicted_v = unet(x_t, h_vec, time_sample, c)
-    loss = loss_f(predicted_v, (x_1 - noise))
+    predicted_v = unet(x_t, h_vec, time_sample, c_masked)
+    loss = nn.functional.mse_loss(predicted_v, (x_1 - noise).detach()) #detach the ground velo because it's a label
 
     return loss, h_next
 
@@ -113,6 +112,7 @@ class FlowMatching(nn.Module):
         self.p_uncond = p_uncond
         self.time_step = time_step
         self.channel_in = channel_in
+        self.device = next(unet.parameters()).device
 
     def forward(self, x: torch.Tensor, x_p: torch.Tensor, h: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         """
@@ -143,6 +143,44 @@ class FlowMatching(nn.Module):
         return fm_sample(
             self.unet, self.GRU, c, x_p, h, img_wh, self.num_ts, self.time_step, guidance_scale, seed, self.channel_in
         )
+    
+    @torch.inference_mode()
+    def autoregressive_sample(self, 
+                            c: torch.Tensor, 
+                            autoregressive_steps: int,
+                            img_wh: Tuple[int, int], 
+                            x_p: torch.Tensor = None,
+                            guidance_scale: float = 5.0, 
+                            seed: int = 0):
+        """
+        Args:
+            c: (N, num_class) int64 condition tensor.
+            autoregressive_steps: int, number of autoregressive steps.
+            img_wh: (H, W) output image width and height.
+            x_p: (N, C * time_step, H, W) the starting chunk of the video
+            guidance_scale: float, CFG scale.
+            seed: int, random seed.
+        """
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        B, H, W   = c.size(0), *img_wh
+        Cin       = self.channel_in            # usually 1
+        T         = self.time_step             # 12
+        device    = self.device
+        # rolling buffer that always holds *last 12 frames* as channels
+        buf = torch.zeros(B, self.channel_in * self.time_step, H, W, device=device) if x_p is None else x_p
+        video = []
+        # initialize GRU hidden state
+        h_state = self.GRU.init_state(batch=B, device=device)
+        for _ in range(autoregressive_steps):
+            chunk, h_state = self.sample(c, buf, h_state, img_wh, guidance_scale=guidance_scale, seed=seed)
+            chunk = chunk.view(B, self.time_step, self.channel_in, H, W)  # (B, 12, 1, H, W)
+            video.append(chunk)
+            buf = chunk.reshape(B, Cin*T, H, W)  
+        video = torch.cat(video, dim=1)
+        return video
+        
+        
     
 
 if __name__ == "__main__":
