@@ -43,6 +43,43 @@ def fm_forward(
 
     return loss, h_next
 
+def fm_forward_fixed_GRU(
+    unet: UNet,
+    x_1: torch.Tensor,
+    h_vec: torch.Tensor,
+    c: torch.Tensor,
+    p_uncond: float,
+) -> torch.Tensor:
+    """
+    Args:
+        unet: TimeConditionalUNet
+        x_1: (B, C * num_Step, H, W) ground truth tensor.
+        x_p: (B, C * num_Step, H, W) past trejectory
+        n: int, number of times to run the forward pass
+        h_vec: (GRU_layer, B, GRU_hidden) GRU Feature
+        c: (B, num_class)
+        p: dropout frequency
+    Returns:
+        (,) loss.
+    """
+    unet.train()
+    device = next(unet.parameters()).device
+    c_masked = c.clone()
+    noise = torch.randn_like(x_1).to(device)
+    time_sample = torch.rand((x_1.size(0), 1)).to(device)
+    time = time_sample.reshape(-1, 1, 1, 1)
+    x_t = (1 - time) * noise + time * x_1
+
+    random_number = torch.rand(()).item()
+    if random_number < p_uncond:
+      mask = torch.zeros_like(c)
+      c_masked = c_masked * mask
+
+    predicted_v = unet(x_t, h_vec, time_sample, c_masked)
+    loss = nn.functional.mse_loss(predicted_v, (x_1 - noise).detach()) #detach the ground velo because it's a label
+
+    return loss
+
 
 @torch.inference_mode()
 def fm_sample(
@@ -75,6 +112,7 @@ def fm_sample(
         (N, T_animation, C, H, W) caches.
     """
     unet.eval()
+    GRU.eval()
     device = next(unet.parameters()).device
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
@@ -129,6 +167,16 @@ class FlowMatching(nn.Module):
         return fm_forward(
             self.unet, self.GRU, x, x_p, h, c, self.p_uncond
         )
+    
+    def forward_fixed_GRU(self, x: torch.Tensor, h_vec: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        return fm_forward_fixed_GRU(
+            self.unet, x, h_vec, c, self.p_uncond
+        )
+    
+    def get_GRU_feature(self, x: torch.Tensor, x_p: torch.Tensor, h: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        self.GRU.train()
+        h_vec, h_next = self.GRU(x_p, h)
+        return h_vec, h_next
 
     @torch.inference_mode()
     def sample(
