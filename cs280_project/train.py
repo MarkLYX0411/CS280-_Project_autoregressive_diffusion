@@ -8,149 +8,94 @@ from dataset import QuickDrawDataset
 from GRU import HistoryEncoder
 import os
 
-def train_fm_cond(fm_model, epoch, lr, train_dataloader, val_dataloader, device, in_channel, gradient_clip = 0, save_path = './checkpoints'):
-  optimizer = torch.optim.Adam(fm_model.parameters(), lr=lr) #train the whole model
-  scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma= 0.89)
+def train_fm_cond(
+    fm_model,
+    epoch,
+    fm_epoch,
+    lr,
+    train_dataloader,
+    val_dataloader,
+    device,
+    in_channel,
+    gradient_clip=0.0,
+    save_path="./checkpoints",
+    chunk_size=12,
+    save_freq=1,
+    validating=False,
+):
   model = fm_model.to(device)
-  train_loss = []
-  chunk_size = 12
-  best_loss = float('inf')
-  best_model = None
-  save_freq = 10
-  validating = False
-  
+  optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+  scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.89)
+
+  train_losses, best_loss = [], float("inf")
+  best_state = None
+
   for ep in range(epoch):
-    print(f"Epoch {ep+1}/{epoch}")
     model.train()
-    epoch_loss = 0.0
-    batch_count = 0
-    #video shape: (batch_size, frames, H, W)
-    for video, labels in tqdm(train_dataloader):
-      video = video.to(device)
-      labels = labels.to(device)
-      batch_size = video.size(0)
-      
-      num_frames = video.size(1)
-      num_chunks = num_frames // chunk_size
-      
-      # 只处理有足够块数的视频
+    epoch_loss, batch_cnt = 0.0, 0
+
+    for video, labels in tqdm(train_dataloader, leave=False):
+      video, labels = video.to(device), labels.to(device)
+      B, T = video.shape[:2]
+      num_chunks = T // chunk_size
       if num_chunks < 2:
-        continue
-      
-      # 初始化GRU隐藏状态
-      h_state = model.GRU.init_state(batch=batch_size, device=device)
-      
-      # 按时间顺序处理每个块
-      for i in range(num_chunks-1):  # 最后一个块作为目标，不作为输入
-        # 获取当前块作为输入
-        current_chunk = video[:, i*chunk_size:(i+1)*chunk_size]
-        # 获取下一个块作为目标
-        next_chunk = video[:, (i+1)*chunk_size:(i+2)*chunk_size]
-        
-        # 计算损失，model.forward会自动处理GRU
-        loss, h_state = model.forward(next_chunk, current_chunk, h_state, labels)
-        
-        # 记录和反向传播
-        train_loss.append(loss.item())
-        epoch_loss += loss.item()
-        batch_count += 1
-        
-        loss.backward()
-        
+          continue
 
-        if gradient_clip > 0:
-          torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=gradient_clip)
+      h_state = model.GRU.init_state(batch=B, device=device)
 
-        optimizer.step()
-        optimizer.zero_grad()
+      # iterate through consecutive block pairs
+      for i in range(num_chunks - 1):
+        x_chunk = video[:, i * chunk_size : (i + 1) * chunk_size]
+        y_chunk = video[:, (i + 1) * chunk_size : (i + 2) * chunk_size]
 
-        #detach the h_state to avoid double backprop
+        with torch.no_grad():
+          h_vec, h_state = model.get_GRU_feature(x_chunk, h_state)
+        h_vec = h_vec.detach()          # <-- drop graph
+
+        for k in range(fm_epoch):
+          #retain = k < fm_epoch - 1
+          optimizer.zero_grad(set_to_none=True)
+
+          loss = model.forward_fixed_GRU(y_chunk, h_vec, labels)
+          loss.backward()
+
+          if gradient_clip > 0:
+              torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+
+          optimizer.step()
+          epoch_loss += loss.item()
+          train_losses.append(loss.item())
+
+          print(f"Epoch {ep+1}/{epoch} fm_epoch {k+1}/{fm_epoch} | train loss {loss.item():.5f}")
+
+        batch_cnt += 1
         h_state = h_state.detach()
-    
-    # 打印本轮训练的平均损失
-    avg_epoch_loss = epoch_loss / max(batch_count, 1)
-    print(f"Epoch {ep+1} average loss: {avg_epoch_loss:.6f}")
-    
-    # 验证和可视化
+
+    # ----- epoch end -----
+    mean_loss = epoch_loss / max(batch_cnt, 1)
+    print(f"Epoch {ep+1}/{epoch} | train loss {mean_loss:.5f}")
+
+    if batch_cnt:            # avoid decay if nothing was trained
+        scheduler.step()
+
+    # ----- validation -----
     if validating:
-      print("Validating...")
-      val_loss = validate_and_visualize(model, val_dataloader, in_channel, 
-                                     device=device,
-                                     autoregressive_steps=0, 
-                                     visualization=(ep % 5 == 0))
-      print(f"Validation loss: {val_loss:.6f}")
-    
+      val_loss = validate_and_visualize(
+        model, val_dataloader, in_channel,
+        device=device, autoregressive_steps=0,
+        visualization=(ep % 5 == 0),
+      )
+      print(f"  val loss {val_loss:.5f}")
       if val_loss < best_loss:
-        best_loss = val_loss
-        best_model = model.state_dict()
-    
+        best_loss, best_state = val_loss, {
+          k: v.cpu() for k, v in model.state_dict().items()
+        }
+
     if (ep + 1) % save_freq == 0:
-      torch.save(model.state_dict(), os.path.join(save_path, f'model_{ep+1}.pth'))
-    
-    scheduler.step()
-  
-  if best_model:
-    torch.save(best_model, os.path.join(save_path, 'best_model.pth'))
+      torch.save(model.state_dict(), os.path.join(save_path, f"model_{ep+1}.pth"))
 
-  # 绘制训练损失曲线
-  import matplotlib.pyplot as plt
-  plt.figure(figsize=(10, 6))
-  x_values = list(range(len(train_loss)))
-  plt.plot(x_values, train_loss)
-  plt.title('Training Loss')
-  plt.xlabel('Iteration')
-  plt.ylabel('MSE loss')
-  plt.yscale('log')
-  plt.savefig('training_loss.png')
-  plt.close()
-    
-### Flow matching training
-# def train_fm_cond(fm_model, epoch, lr, train_dataloader, val_dataloader, device, in_channel, gradient_clip = 0):
-#   optimizer = torch.optim.Adam(fm_model.unet.parameters(), lr=lr)
-#   scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma= 0.89)
-#   model = fm_model.to(device)
-#   train_loss = []
-
-#   num_chunks = 60 // 12
-
-#   for ep in range(epoch):
-#     model.train()
-#     # video = [bs, frames=60, 1, 256, 256]
-#     for video, c in tqdm(train_dataloader):
-#       for i in range(num_chunks):
-#         # video = [bs, frames=60, 1, 256, 256]
-#         image = video[:, i * 12: (i + 1) * 12, :, :, :]
-#         if i == 0:
-#           x_p = torch.zeros_like(image)
-#           h_next = model.GRU.init_state(batch=x_p.size(0), device=device)
-#         else:
-#           x_p = video[:, (i - 1) * 12: i * 12, :, :]
-#         h_vec, h_next = model.GRU(x_p, h_next)
-
-#       if torch.all(x_p == 0):
-#         h_vec = model.GRU.init_state(batch=x_p.size(0), device=device)
-#       h_vec, h_next = model.GRU(x_p, h_vec)
-
-#       loss = model.forward(image.to(device), x_p.to(device), h_vec, c.to(device))
-#       train_loss.append(loss.item())
-#       loss.backward()
-#       if gradient_clip:
-#         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=gradient_clip)
-#       optimizer.step()
-#       optimizer.zero_grad()
-
-#     validate_and_visualize(model, val_dataloader, in_channel, autoregressive_steps=0)
-
-#     scheduler.step()
-
-#   x_values = list(range(len(train_loss)))
-#   plt.plot(x_values, train_loss)
-#   plt.title('Training Loss')
-#   plt.xlabel('Iteration')
-#   plt.ylabel('MSE loss')
-#   plt.yscale('log')
-
-
+  if best_state is not None:
+    torch.save(best_state, os.path.join(save_path, "best_model.pth"))
 
 ## TODO: this function is currently buggy
 ## TODO (1) use `autoregressive_sample` to generate the video, then compute MSE on val data, use the first 12 frames as x_p
@@ -223,7 +168,7 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
     
     # 数据路径
-    data_path = 'data/quickdraw_1k.npz'
+    data_path = 'data/compressed_quickdraw_1k.npz'
     
     # 创建数据加载器
     batch_size = 8
@@ -251,4 +196,4 @@ if __name__ == "__main__":
     )
     
     # 开始训练
-    train_fm_cond(model, 20, 1e-2, train_loader, val_loader, device, 1)
+    train_fm_cond(model, 20, 100, 1e-3, train_loader, val_loader, device, 1)
