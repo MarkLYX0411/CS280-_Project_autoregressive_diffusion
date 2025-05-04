@@ -48,13 +48,10 @@ def train_fm_cond(
         x_chunk = video[:, i * chunk_size : (i + 1) * chunk_size]
         y_chunk = video[:, (i + 1) * chunk_size : (i + 2) * chunk_size]
 
-        with torch.no_grad():
-          h_vec, h_state = model.get_GRU_feature(x_chunk, h_state)
-        h_vec = h_vec.detach()          # <-- drop graph
-
         for k in range(fm_epoch):
           #retain = k < fm_epoch - 1
           optimizer.zero_grad(set_to_none=True)
+          h_vec, h_curr = model.get_GRU_feature(x_chunk, h_state)
 
           loss = model.forward_fixed_GRU(y_chunk, h_vec, labels)
           loss.backward()
@@ -69,10 +66,10 @@ def train_fm_cond(
           print(f"Epoch {ep+1}/{epoch} fm_epoch {k+1}/{fm_epoch} | train loss {loss.item():.5f}")
 
         batch_cnt += 1
-        h_state = h_state.detach()
+        h_state = h_curr.detach()
 
     # ----- epoch end -----
-    mean_loss = epoch_loss / max(batch_cnt, 1)
+    mean_loss = epoch_loss / (max(batch_cnt, 1) * fm_epoch)
     print(f"Epoch {ep+1}/{epoch} | train loss {mean_loss:.5f}")
 
     if batch_cnt:            # avoid decay if nothing was trained
