@@ -4,28 +4,51 @@ from tqdm import tqdm
 from FMT.vae import VAE
 from dataset import QuickDrawDataset    
 import torch.nn.functional as F
-from torch.cuda import amp
+from torch.utils.data import Dataset
+import bisect
 
-class FrameDataset(torch.utils.data.Dataset):
+class FrameDataset(Dataset):
     """
-    Converts the (video, label) pairs from QuickDrawDataset into
-    individual frames so the VAE learns per‑frame reconstructions.
+    Flattens the QuickDraw *video* dataset into individual *frames*.
+
+    Each __getitem__ returns:
+        frame : torch.FloatTensor  (1, H, W)  — pixel range [0,1]
     """
-    def __init__(self, root_npz: str, split='train'):
-        self.videos  = QuickDrawDataset(root_npz, split=split)
+    def __init__(self, npz_path: str, split: str = "train"):
+        super().__init__()
+        self.videos = QuickDrawDataset(npz_path, split=split)
 
-    def __len__(self):                     # total frames in split
-        return sum(len(v[0]) for v in self.videos)
-
-    def __getitem__(self, idx):
-        # binary search through cumulative lengths
+        # build cumulative frame counts so we can binary‑search
+        self.cum_frames = []
         running = 0
-        for video, _ in self.videos:
-            if idx < running + len(video):
-                frame = video[idx - running]     # (H,W) numpy float32
-                return torch.from_numpy(frame).unsqueeze(0)  # (1,H,W)
-            running += len(video)
-        raise IndexError
+        for video, _ in self.videos:          # video : (T, H, W) numpy/torch
+            running += video.shape[0]
+            self.cum_frames.append(running)   # last entry = total_frames
+        self.total_frames = running
+
+    # -------- Dataset API --------
+    def __len__(self):
+        return self.total_frames
+
+    def __getitem__(self, idx: int):
+        if idx < 0 or idx >= self.total_frames:
+            raise IndexError(idx)
+
+        # locate which video this frame lives in
+        vid_idx = bisect.bisect_right(self.cum_frames, idx)
+        first_frame_of_video = 0 if vid_idx == 0 else self.cum_frames[vid_idx - 1]
+        frame_idx = idx - first_frame_of_video
+
+        video, _ = self.videos[vid_idx]       # video: (T, H, W) tensor
+        frame = video[frame_idx]              # (H, W)
+
+        # ensure tensor float32 in [0,1] and add channel dim
+        if not torch.is_tensor(frame):
+            frame = torch.from_numpy(frame)
+        frame = frame.float()
+        if frame.max() > 1.0:
+            frame = frame / 255.0
+        return frame.unsqueeze(0)
 
 def train_vae(
         data_path:   str   = 'data/compressed_quickdraw_1k.npz',
@@ -51,7 +74,7 @@ def train_vae(
     train_ld = DataLoader(train_ds, batch_size, True,  num_workers=num_workers, pin_memory=True)
     val_ld   = DataLoader(val_ds,   batch_size, False, num_workers=num_workers, pin_memory=True)
 
-    scaler = amp.GradScaler(enabled=(amp and device == 'cuda'))
+    scaler = torch.amp.GradScaler('cuda', enabled=(amp and device == 'cuda'))
 
     best_val = math.inf
     for ep in range(1, epochs+1):
@@ -61,7 +84,7 @@ def train_vae(
         running_l1, running_kl = 0.0, 0.0
         for x in tqdm(train_ld, desc=f'Epoch {ep}/{epochs}'):
             x = x.to(device)
-            with amp.autocast(enabled=(amp and device == 'cuda')):
+            with torch.amp.autocast('cuda', enabled=(amp and device == 'cuda')):
                 out = vae(x)
                 loss = out['loss']
             scaler.scale(loss).backward()
