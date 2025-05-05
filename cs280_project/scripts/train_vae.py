@@ -55,7 +55,7 @@ def train_vae(
         batch_size:  int   = 256,
         epochs:      int   = 60,
         lr:          float = 1e-3,
-        kl_beta:     float = 1e-4,
+        kl_beta:     float = 1e-2,
         save_dir:    str   = './checkpoints/vae',
         save_freq:   int   = 5,
         num_workers: int   = 4,
@@ -102,13 +102,17 @@ def train_vae(
 
         # ----- validation -----
         vae.eval()
-        val_l1 = 0.0
+        val_l1, val_kl = 0.0, 0.0
         with torch.no_grad():
             for x in val_ld:
                 x = x.to(device)
-                val_l1 += F.l1_loss(vae(x)['x_hat'], x, reduction='sum').item()
+                out = vae(x)
+                val_l1 += out['recon_l1'].item() * x.size(0)   # keep per‑pixel mean
+                val_kl += out['kl'].item()       * x.size(0)
+
         val_l1 /= len(val_ds)
-        print(f'  val   L1 {val_l1:.4f}')
+        val_kl /= len(val_ds)
+        print(f'  val   L1 {val_l1:.4f}  KL {val_kl:.4f}')
 
         # ----- checkpointing -----
         if val_l1 < best_val:
@@ -127,7 +131,7 @@ if __name__ == "__main__":
     parser.add_argument('--epochs', type=int, default=60)
     parser.add_argument('--batch',  type=int, default=256)
     parser.add_argument('--lr',     type=float, default=1e-3)
-    parser.add_argument('--kl',     type=float, default=1e-4)
+    parser.add_argument('--kl',     type=float, default=1e-2)
     parser.add_argument('--save',   default='./checkpoints/vae')
     args = parser.parse_args()
 
