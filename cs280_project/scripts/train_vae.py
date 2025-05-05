@@ -4,6 +4,7 @@ from tqdm import tqdm
 from FMT.vae import VAE
 from dataset import QuickDrawDataset    
 import torch.nn.functional as F
+from torch.cuda import amp
 
 class FrameDataset(torch.utils.data.Dataset):
     """
@@ -50,7 +51,7 @@ def train_vae(
     train_ld = DataLoader(train_ds, batch_size, True,  num_workers=num_workers, pin_memory=True)
     val_ld   = DataLoader(val_ds,   batch_size, False, num_workers=num_workers, pin_memory=True)
 
-    scaler = torch.amp.GradScaler('cuda', enabled=(amp and device=='cuda'))
+    scaler = amp.GradScaler(enabled=(amp and device == 'cuda'))
 
     best_val = math.inf
     for ep in range(1, epochs+1):
@@ -60,7 +61,7 @@ def train_vae(
         running_l1, running_kl = 0.0, 0.0
         for x in tqdm(train_ld, desc=f'Epoch {ep}/{epochs}'):
             x = x.to(device)
-            with torch.amp.autocast('cuda', enabled=(amp and device=='cuda')):
+            with amp.autocast(enabled=(amp and device == 'cuda')):
                 out = vae(x)
                 loss = out['loss']
             scaler.scale(loss).backward()
