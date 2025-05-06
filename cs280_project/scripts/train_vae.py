@@ -1,6 +1,12 @@
 import os, math, argparse, torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+import sys
+
+model_path = os.path.abspath(os.path.join(os.getcwd(), '..'))
+print(model_path)
+sys.path.append(model_path)
+
 from FMT.vae import VAE
 from dataset import QuickDrawDataset    
 import torch.nn.functional as F
@@ -81,7 +87,7 @@ def train_vae(
 
         # ----- training -----
         vae.train()
-        running_l1, running_kl = 0.0, 0.0
+        running_bce, running_kl = 0.0, 0.0
         for x in tqdm(train_ld, desc=f'Epoch {ep}/{epochs}'):
             x = x.to(device)
             with torch.amp.autocast('cuda', enabled=(amp and device == 'cuda')):
@@ -92,47 +98,47 @@ def train_vae(
             scaler.update()
             opt.zero_grad(set_to_none=True)
 
-            running_l1 += out['recon_l1'].item() * x.size(0)
+            running_bce += out['recon_bce'].item() * x.size(0)
             running_kl += out['kl'].item()       * x.size(0)
 
         sched.step()
-        train_l1 = running_l1 / len(train_ds)
+        train_bce = running_bce / len(train_ds)
         train_kl = running_kl / len(train_ds)
-        print(f'  train L1 {train_l1:.4f}  KL {train_kl:.4f}')
+        print(f'  train BCE {train_bce:.4f}  KL {train_kl:.4f}')
 
         # ----- validation -----
         vae.eval()
-        val_l1, val_kl = 0.0, 0.0
+        val_bce, val_kl = 0.0, 0.0
         with torch.no_grad():
             for x in val_ld:
                 x = x.to(device)
                 out = vae(x)
-                val_l1 += out['recon_l1'].item() * x.size(0)   # keep per‑pixel mean
+                val_bce += out['recon_bce'].item() * x.size(0)   # keep per‑pixel mean
                 val_kl += out['kl'].item()       * x.size(0)
 
-        val_l1 /= len(val_ds)
+        val_bce /= len(val_ds)
         val_kl /= len(val_ds)
-        print(f'  val   L1 {val_l1:.4f}  KL {val_kl:.4f}')
+        print(f'  val   BCE {val_bce:.4f}  KL {val_kl:.4f}')
 
         # ----- checkpointing -----
-        if val_l1 < best_val:
-            best_val = val_l1
+        if val_bce < best_val:
+            best_val = val_bce
             torch.save(vae.state_dict(), os.path.join(save_dir, 'best.pth'))
             print('  ↳ new best model saved.')
         if ep % save_freq == 0:
             torch.save(vae.state_dict(), os.path.join(save_dir, f'vae_{ep:03d}.pth'))
 
-    print(f'Done. Best val L1 = {best_val:.4f}')
+    print(f'Done. Best val BCE = {best_val:.4f}')
 
 # ----------  CLI entry  ----------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', default='data/compressed_quickdraw_1k.npz')
+    parser.add_argument('--data', default='../data/quickdraw_mini.npz')
     parser.add_argument('--epochs', type=int, default=60)
     parser.add_argument('--batch',  type=int, default=256)
     parser.add_argument('--lr',     type=float, default=1e-3)
     parser.add_argument('--kl',     type=float, default=1e-2)
-    parser.add_argument('--save',   default='./checkpoints/vae')
+    parser.add_argument('--save',   default='./checkpoints/vae2')
     args = parser.parse_args()
 
     train_vae(

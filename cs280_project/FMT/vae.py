@@ -45,7 +45,7 @@ class Decoder(nn.Module):
             deconv(128,64),           # 128²
             deconv(64, 32),           # 256²
             nn.Conv2d(32, 1, 3, 1, 1),
-            nn.Sigmoid(),             # pixel range [0,1]
+            # nn.Sigmoid(),             # pixel range [0,1]
         )
 
     def forward(self, z):
@@ -70,11 +70,11 @@ class VAE(nn.Module):
         z = self.reparameterise(mu, logvar)
         x_hat = self.dec(z)
         # losses
-        recon_l1 = F.l1_loss(x_hat, x, reduction='mean')
+        recon_bce = F.binary_cross_entropy_with_logits(x_hat, x, reduction='mean')
         kl = 0.5 * torch.mean(mu.pow(2) + logvar.exp() - logvar - 1)
-        loss = recon_l1 + self.kl_beta * kl
+        loss = recon_bce + self.kl_beta * kl
         return {'x_hat': x_hat, 'mu': mu, 'logvar': logvar,
-                'recon_l1': recon_l1, 'kl': kl, 'loss': loss}
+                'recon_bce': recon_bce, 'kl': kl, 'loss': loss}
 
     # handy helpers for downstream modules
     @torch.no_grad()
