@@ -21,13 +21,18 @@ class QuickDrawDataset(torch.utils.data.Dataset):
         # 创建视频索引列表
         self.valid_indices = []
         cnt = 0
+        zipped = zip(self.images, self.labels)
         for video_idx, video in enumerate(self.images):
+        # for video_idx, (video, label) in enumerate(zipped):
             # 只要视频有至少一帧，就加入索引
+            # if label[0] != 1 and label[1] != 1:
+            #     continue
             cnt += 1
             if len(video) > 0:
                 self.valid_indices.append(video_idx)
-            if cnt >= 50:
-                break
+        # print(cnt)
+            # if cnt >= 1:
+            #     break
     
     def __len__(self):
         return len(self.valid_indices)

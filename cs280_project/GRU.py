@@ -35,8 +35,8 @@ class HistoryEncoder(nn.Module):
     """
     def __init__(self,
                  in_frames:     int,      # chunk size (e.g. 12 or 24)
-                 feat_dim:      int = 512,
-                 hidden_dim:    int = 512,
+                 feat_dim:      int = 128,
+                 hidden_dim:    int = 128,
                  n_gru_layers:  int = 2):
         super().__init__()
         self.cnn = ConvEncoder(in_frames, feat_dim)

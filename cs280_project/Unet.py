@@ -97,10 +97,10 @@ class UNet(nn.Module):
         in_channels: int,
         num_hiddens: int,
         num_hiddens_decoder: int,
-        num_hiddens_GRU: int = 512,
+        num_hiddens_GRU: int = 128,
         num_class: int = 10,
-        H: int = 256,
-        W: int = 256,
+        H: int = 64,
+        W: int = 64,
         past_time_step: int = 12
     ):
         super().__init__()
@@ -109,28 +109,61 @@ class UNet(nn.Module):
 
         ### Encoder block for noisy next trejectory
         self.conv_1 = ConvBlock(in_channels * past_time_step, num_hiddens) #(b, hidden, h, w)
-        self.down_1 = DownBlock(num_hiddens, 2 * num_hiddens) #(b, 2 * hidden, h//2, w//2)
-        self.down_2 = DownBlock(2 * num_hiddens, 4 * num_hiddens) #(b, 4 * hidden, h//4, w//4)
-        self.down_3 = DownBlock(4 * num_hiddens, 8 * num_hiddens) #(b, 8 * hidden, h//8, w//8)
-        self.down_4 = DownBlock(8 * num_hiddens, 16 * num_hiddens) #(b, 16 * hidden, h//16, w//16)
+        self.down_1 = DownBlock(num_hiddens, num_hiddens) #(b, 2 * hidden, h//2, w//2)
+        self.down_2 = DownBlock(num_hiddens, 2 * num_hiddens) #(b, 4 * hidden, h//4, w//4)
+        self.down_3 = DownBlock(2 * num_hiddens, 2 * num_hiddens) #(b, 8 * hidden, h//8, w//8)
+        self.down_4 = DownBlock(2 * num_hiddens, 4 * num_hiddens) #(b, 16 * hidden, h//16, w//16)
         ### 
 
         ### Decoder
-        self.after_GRU = nn.Linear(num_hiddens_GRU, num_hiddens_decoder * 16 * (self.H//16) * (self.W//16))
+        # self.after_GRU = nn.Linear(num_hiddens_GRU, num_hiddens_decoder * 16 * (self.H//16) * (self.W//16))
+        self.gru_upsampler = nn.Sequential(
+            nn.ConvTranspose2d(num_hiddens_GRU, num_hiddens_GRU, kernel_size=4, stride=2, padding=1),  # 1x1 -> 2x2
+            nn.BatchNorm2d(num_hiddens_GRU),
+            nn.GELU(),
+            nn.ConvTranspose2d(num_hiddens_GRU, num_hiddens_GRU, kernel_size=4, stride=2, padding=1),  # 2x2 -> 4x4
+            nn.BatchNorm2d(num_hiddens_GRU),
+            nn.GELU(),
+            # nn.ConvTranspose2d(num_hiddens_GRU, num_hiddens_GRU, kernel_size=4, stride=2, padding=1),  # 4x4 -> 8x8
+            # nn.BatchNorm2d(num_hiddens_GRU),
+            # nn.GELU(),
+            # nn.ConvTranspose2d(num_hiddens_GRU, num_hiddens_GRU, kernel_size=4, stride=2, padding=1),  # 8x8 -> 16x16
+            # nn.BatchNorm2d(num_hiddens_GRU),
+            # nn.GELU(),
+        )
         dim_out = num_hiddens +  num_hiddens_decoder
-        self.up_1 = UpBlock(16 * dim_out, 8 * dim_out, 8 * num_hiddens) #(b, 8 * hidden_out, h//8, w//8)
-        self.up_2 = UpBlock(8 * dim_out, 4 * dim_out, 4 * num_hiddens) # (b, 4 * hidden_out, h//4, w//4)
-        self.up_3 = UpBlock(4 * dim_out, 2 * dim_out, 2 * num_hiddens) # (b, 2 * hidden_out, h//2, w//2)
-        self.up_4 = UpBlock(2 * dim_out, dim_out, num_hiddens) # (b, hidden_out, h, w)
+        self.up_1 = UpBlock(4 * dim_out, 2 * dim_out, 2 * num_hiddens) #(b, 8 * hidden_out, h//8, w//8)
+        self.up_2 = UpBlock(2 * dim_out, 2 * dim_out, 2 * num_hiddens) # (b, 4 * hidden_out, h//4, w//4)
+        self.up_3 = UpBlock(2 * dim_out, dim_out, num_hiddens) # (b, 2 * hidden_out, h//2, w//2)
+        self.up_4 = UpBlock(dim_out, dim_out, num_hiddens) # (b, hidden_out, h, w)
         self.final_conv = nn.Sequential(nn.Conv2d(dim_out, num_hiddens_decoder, 3, stride=1, padding=1), 
                         nn.Conv2d(num_hiddens_decoder, in_channels * past_time_step, 3, stride=1, padding=1)) # (b, in_channel, h, w)
         ###
 
+        # ### Encoder block for noisy next trejectory
+        # self.conv_1 = ConvBlock(in_channels * past_time_step, num_hiddens) #(b, hidden, h, w)
+        # self.down_1 = DownBlock(num_hiddens, 2 * num_hiddens) #(b, 2 * hidden, h//2, w//2)
+        # self.down_2 = DownBlock(2 * num_hiddens, 4 * num_hiddens) #(b, 4 * hidden, h//4, w//4)
+        # self.down_3 = DownBlock(4 * num_hiddens, 8 * num_hiddens) #(b, 8 * hidden, h//8, w//8)
+        # self.down_4 = DownBlock(8 * num_hiddens, 16 * num_hiddens) #(b, 16 * hidden, h//16, w//16)
+        # ### 32510572
+
+        # ### Decoder
+        # # self.after_GRU = nn.Linear(num_hiddens_GRU, num_hiddens_decoder * 16 * (self.H//16) * (self.W//16))
+        # dim_out = num_hiddens +  num_hiddens_decoder
+        # self.up_1 = UpBlock(16 * dim_out, 8 * dim_out, 8 * num_hiddens) #(b, 8 * hidden_out, h//8, w//8)
+        # self.up_2 = UpBlock(8 * dim_out, 4 * dim_out, 4 * num_hiddens) # (b, 4 * hidden_out, h//4, w//4)
+        # self.up_3 = UpBlock(4 * dim_out, 2 * dim_out, 2 * num_hiddens) # (b, 2 * hidden_out, h//2, w//2)
+        # self.up_4 = UpBlock(2 * dim_out, dim_out, num_hiddens) # (b, hidden_out, h, w)
+        # self.final_conv = nn.Sequential(nn.Conv2d(dim_out, num_hiddens_decoder, 3, stride=1, padding=1), 
+        #                 nn.Conv2d(num_hiddens_decoder, in_channels * past_time_step, 3, stride=1, padding=1)) # (b, in_channel, h, w)
+        # ###
+
         ### Time and class embedding
-        self.timeembed_1 = FCBlock(1, 8 * dim_out)
-        self.timeembed_2 = FCBlock(1, 4 * dim_out)
-        self.classembed_1 = FCBlock(num_class, 8 * dim_out)
-        self.classembed_2 = FCBlock(num_class, 4 * dim_out)
+        self.timeembed_1 = FCBlock(1, 2 * dim_out)
+        self.timeembed_2 = FCBlock(1, 2 * dim_out)
+        self.classembed_1 = FCBlock(num_class, 2 * dim_out)
+        self.classembed_2 = FCBlock(num_class, 2 * dim_out)
         ###
 
     def forward(self, x: torch.Tensor, x_GRU: torch.Tensor, t: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
@@ -145,23 +178,44 @@ class UNet(nn.Module):
             out: (b, channel_in, h, w)
         """
 
+        # x.shape = [10, 12, 256, 256]
         ### Encode noisy next trejectory
-        x_layer1 = self.conv_1(x) #(b, hidden, h, w)
-        x_down1 = self.down_1(x_layer1) #(b, 2 * hidden, h//2, w//2)
-        x_down2 = self.down_2(x_down1) #(b, 4 * hidden, h//4, w//4)
-        x_down3 = self.down_3(x_down2) #(b, 8 * hidden, h//8, w//8)
-        x_bottleneck = self.down_4(x_down3) #(b, 16 * hidden, h//16, w//16)
+        x_layer1 = self.conv_1(x) #(b, hidden, h, w) [10, 64, 256, 256]
+        x_down1 = self.down_1(x_layer1) #(b, 2 * hidden, h//2, w//2) [10, 128, 128, 128]
+        x_down2 = self.down_2(x_down1) #(b, 4 * hidden, h//4, w//4) [10, 256, 64, 64]
+        x_down3 = self.down_3(x_down2) #(b, 8 * hidden, h//8, w//8) [10, 512, 32, 32]
+        x_bottleneck = self.down_4(x_down3) #(b, 16 * hidden, h//16, w//16) [10, 1024, 16, 16]
         ###
 
+
+        # (1) decrease the resolution of image
+        # (2) decrease # of conv blocks
+
         ### Decode 
-        GRU_feature = self.after_GRU(x_GRU).view(x_GRU.size(0), -1, self.H//16, self.W//16) #(b, hiddens_decoder * 16, h//16, w//16))
+        # x_GRU.shape = [10, 512]
+        # GRU_feature.shape = [10, 1024, 16, 16]
+
+        # just expand the GRU feature to the same size as the bottleneck, do not use the after_GRU layer
+        # GRU_feature = x_GRU.view(x_GRU.size(0), -1, self.H//16, self.W//16) #(b, hiddens_decoder * 16, h//16, w//16)) [10, 1024, 16, 16]
+
+        # First reshape x_GRU to [10, 512, 1, 1]
+        GRU_feature = x_GRU.view(x_GRU.size(0), x_GRU.size(1), 1, 1)
+        GRU_feature = self.gru_upsampler(GRU_feature)
+
+        # Then expand it to match spatial dimensions [10, 512, 16, 16]
+        # GRU_feature = GRU_feature.expand(-1, -1, self.H//16, self.W//16)
+        # we can also consider conv2dtranspose to first upsample the GRU feature to the same size as the bottleneck
+
+
+
+        # GRU_feature = self.after_GRU(x_GRU).view(x_GRU.size(0), -1, self.H//16, self.W//16) #(b, hiddens_decoder * 16, h//16, w//16)) [10, 1024, 16, 16]
         x_up1 = self.up_1(torch.cat((GRU_feature, x_bottleneck), dim = 1), x_down3, 
-            ) * (self.classembed_1(c)[..., None, None]) +  (self.timeembed_1(t)[..., None, None]) #(b, 8 * hidden_out, h//8, w//8)
+            ) * (self.classembed_1(c)[..., None, None]) +  (self.timeembed_1(t)[..., None, None]) #(b, 8 * hidden_out, h//8, w//8) [10, 1024, 32, 32]
         x_up2 = self.up_2(x_up1, x_down2) * (
-            self.classembed_2(c)[..., None, None]) +  (self.timeembed_2(t)[..., None, None]) #(b, 4 * hidden_out, h//4, w//4)
-        x_up3 = self.up_3(x_up2, x_down1) # (b, 2 * hidden_out, h//2, w//2)
-        x_up4 = self.up_4(x_up3, x_layer1)  # (b, hidden_out, h, w)
-        out = self.final_conv(x_up4)
+            self.classembed_2(c)[..., None, None]) +  (self.timeembed_2(t)[..., None, None]) #(b, 4 * hidden_out, h//4, w//4) [10, 512, 64, 64]
+        x_up3 = self.up_3(x_up2, x_down1) # (b, 2 * hidden_out, h//2, w//2) [10, 256, 128, 128]
+        x_up4 = self.up_4(x_up3, x_layer1)  # (b, hidden_out, h, w) [10, 128, 256, 256]
+        out = self.final_conv(x_up4) # [10, 12, 256, 256]
         ###
 
         return out
