@@ -7,7 +7,7 @@ class QuickDrawDataset(torch.utils.data.Dataset):
     QuickDraw数据集加载器
     直接返回整个视频序列和类别标签
     """
-    def __init__(self, data_path, split='train'):
+    def __init__(self, data_path, split='train', num_classes=10):
         """
         Args:
             data_path: npz文件路径
@@ -17,7 +17,7 @@ class QuickDrawDataset(torch.utils.data.Dataset):
         data = np.load(data_path, allow_pickle=True)
         self.images = data[f'{split}_images']
         self.labels = data[f'{split}_labels']
-        
+        self.num_classes = num_classes
         # 创建视频索引列表
         self.valid_indices = []
         cnt = 0
@@ -26,8 +26,6 @@ class QuickDrawDataset(torch.utils.data.Dataset):
             cnt += 1
             if len(video) > 0:
                 self.valid_indices.append(video_idx)
-            if cnt >= 50:
-                break
     
     def __len__(self):
         return len(self.valid_indices)
@@ -42,11 +40,13 @@ class QuickDrawDataset(torch.utils.data.Dataset):
         
         # 转换为张量
         video_tensor = torch.from_numpy(video).float()  # [frames, H, W]
+        if video_tensor.max() > 1.0:
+            video_tensor = video_tensor / 255.0
         
         # 获取类别标签 (确保为int64类型)
         label = torch.tensor(self.labels[video_idx], dtype=torch.long)
         # change to one-hot
-        label = torch.nn.functional.one_hot(label, num_classes=10).float()
+        label = torch.nn.functional.one_hot(label, num_classes=self.num_classes).float()
         
         # 返回视频序列和标签
         return video_tensor, label
