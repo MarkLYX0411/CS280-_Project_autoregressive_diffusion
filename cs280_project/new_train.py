@@ -18,66 +18,83 @@ def train_fm_cond(
     device,
     in_channel,
     gradient_clip=0.0,
-    save_path="./checkpoints_0505_64_resolution_32_unet_1k",
+    save_path="./checkpoints_0506_25_drop",
     chunk_size=12,
     save_freq=5,
     validating=False,
 ):
-  os.makedirs(save_path, exist_ok=True)
+    os.makedirs(save_path, exist_ok=True)
 
-  model = fm_model.to(device)
-  optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-  scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.89)
+    model = fm_model.to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.89)
 
-  train_losses, best_loss = [], float("inf")
-  best_state = None
+    train_losses, best_loss = [], float("inf")
+    best_state = None
 
-  # get # of trainable parameters
-  total_params = 0
-  for name, parameter in model.named_parameters():
+    # get # of trainable parameters
+    total_params = 0
+    for name, parameter in model.named_parameters():
         if not parameter.requires_grad: continue
         params = parameter.numel()
         total_params += params
-  print(f"Total Trainable Params: {total_params}")
+    print(f"Total Trainable Params: {total_params}")
 
-  for ep in range(epoch):
-    model.train()
-    epoch_loss, batch_cnt = 0.0, 0
-
-    for video, labels in tqdm(train_dataloader, leave=False):
-        video, labels = video.to(device), labels.to(device)
-        B, T = video.shape[:2]
-        num_chunks = T // chunk_size
-        if num_chunks < 2:
-            continue
-
-        h_state = model.GRU.init_state(batch=B, device=device)
-
-        # iterate through consecutive block pairs
-        for i in range(num_chunks - 1):
-            x_chunk = video[:, i * chunk_size : (i + 1) * chunk_size]
-            y_chunk = video[:, (i + 1) * chunk_size : (i + 2) * chunk_size]
-
-            for k in range(fm_epoch):
-                #retain = k < fm_epoch - 1
+    blocks_per_trunc = 4          # 跨 4 个块反传
+    K = 100                         # 每块随机 8 个 t
+  
+    for ep in range(epoch):
+        epoch_loss = 0.
+        batch_cnt = 0
+        model.train()
+        for video, labels in tqdm(train_loader, leave=False):
+            video, labels = video.to(device), labels.to(device)
+            B, T = video.shape[:2]
+            num_chunks = T // chunk_size
+            if num_chunks < 2:            # 至少两块才能做 A→B
+                continue
+  
+            h_state = model.GRU.init_state(B, device)
+    
+            for i in range(num_chunks - 1):
+                # ---------- 取当前 & 目标块 ----------
+                x_chunk = video[:, i*12 : (i+1)*12]
+                y_chunk = video[:, (i+1)*12 : (i+2)*12]
+    
+                # ---------- 25 % scheduled‑sampling ----------
+                if torch.rand(()) < 0.25 and i > 0:
+                    x_chunk = y_pred.detach()            # 上一轮预测
+                    h_vec, h_state = model.get_GRU_feature(x_chunk, h_new)
+    
+                # ---------- 前向一次 GRU ----------
+                else:
+                    h_vec, h_state = model.get_GRU_feature(x_chunk, h_state)
+    
+                # ---------- 多个随机 t，累加一次 backward ----------
                 optimizer.zero_grad(set_to_none=True)
-                h_vec, h_curr = model.get_GRU_feature(x_chunk, h_state)
-
-                loss = model.forward_fixed_GRU(y_chunk, h_vec, labels)
-                loss.backward()
-
-                if gradient_clip > 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
-
-                optimizer.step()
+                loss = 0.
+                for _ in range(K):
+                    loss += model.forward_fixed_GRU(y_chunk, h_vec, labels)
+                loss /= K
                 epoch_loss += loss.item()
-                train_losses.append(loss.item())
-
-                print(f"Epoch {ep+1}/{epoch} fm_epoch {k+1}/{fm_epoch} | train loss {loss.item():.5f}")
-
-            batch_cnt += 1
-            h_state = h_curr.detach()
-
+                batch_cnt += 1
+    
+                loss.backward()
+                if gradient_clip:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+                optimizer.step()
+    
+                # ---------- 保存当前预测用于 scheduled‑sampling ----------
+                with torch.no_grad():
+                    y_pred, h_new = model.sample(labels, x_chunk, h_state, [64, 64])  # 你的推断函数autoregressive_sample
+                    # y_pred_clone = y_pred.clone()
+                    y_pred = model.transform_black_white(y_pred)
+                h_new = h_new.clone()
+                y_pred = y_pred.clone()
+    
+                # ---------- 控制截断长度 ----------
+                if (i + 1) % blocks_per_trunc == 0:
+                    h_state = h_state.detach()
         # ----- epoch end -----
         mean_loss = epoch_loss / (max(batch_cnt, 1) * fm_epoch)
         print(f"Epoch {ep+1}/{epoch} | train loss {mean_loss:.5f}")
@@ -170,12 +187,12 @@ def validate_and_visualize(model, val_dataloader, in_channel, autoregressive_ste
 
       
 if __name__ == "__main__":
-    model = FlowMatching(UNet(1, 32, 32), GRU=HistoryEncoder(in_frames=12))
+    model = FlowMatching(UNet(1, 64), GRU=HistoryEncoder(in_frames=12))
     device = torch.device('cuda') if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
     
     # 数据路径
-    data_path = '/home/yujunwei/CS280-_Project_autoregressive_diffusuon/quickdraw_1k5_apple_cat.npz'
+    data_path = '/home/yujunwei/CS280-_Project_autoregressive_diffusuon/quickdraw_mini_64.npz'
     
     # 创建数据加载器
     batch_size = 8
@@ -188,7 +205,7 @@ if __name__ == "__main__":
     # 创建数据加载器
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
-        batch_size=256,  # 在这里设置批处理大小
+        batch_size=2,  # 在这里设置批处理大小
         shuffle=True,
         num_workers=10,
         pin_memory=True if torch.cuda.is_available() else False
