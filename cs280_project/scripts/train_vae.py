@@ -62,17 +62,26 @@ def train_vae(
         epochs:      int   = 60,
         lr:          float = 1e-3,
         kl_beta:     float = 1e-2,
+        z_ch: int = 64,
         save_dir:    str   = './checkpoints/vae',
         save_freq:   int   = 5,
         num_workers: int   = 4,
+        pretrained_path: str = None,
         amp:         bool  = True
 ):
     os.makedirs(save_dir, exist_ok=True)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    vae = VAE(z_ch=64, kl_beta=kl_beta).to(device)
+    vae = VAE(z_ch=z_ch, kl_beta=kl_beta).to(device)
+
+    count_parameters(vae)
+
+    if pretrained_path != 'None':
+        state_dict = torch.load(pretrained_path)
+        vae.load_state_dict(state_dict)
+        print(f"model load from {pretrained_path}")
     opt  = torch.optim.Adam(vae.parameters(), lr=lr, betas=(0.9,0.99))
-    sched= torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.95)
+    sched= torch.optim.lr_scheduler.ExponentialLR(opt, gamma=0.99)
 
     train_ds = FrameDataset(data_path, split='train')
     val_ds   = FrameDataset(data_path, split='valid')
@@ -130,15 +139,27 @@ def train_vae(
 
     print(f'Done. Best val BCE = {best_val:.4f}')
 
+
+def count_parameters(model):
+    total_params = 0
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad: continue
+        params = parameter.numel()
+        total_params += params
+    print(f"Total Trainable Params: {total_params}")
+    return total_params
+
 # ----------  CLI entry  ----------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', default='../data/quickdraw_mini.npz')
-    parser.add_argument('--epochs', type=int, default=60)
-    parser.add_argument('--batch',  type=int, default=256)
-    parser.add_argument('--lr',     type=float, default=1e-3)
-    parser.add_argument('--kl',     type=float, default=1e-2)
-    parser.add_argument('--save',   default='./checkpoints/vae2')
+    parser.add_argument('--data', default='../data/quickdraw_50_apple_star.npz')
+    parser.add_argument('--epochs', type=int, default=70)
+    parser.add_argument('--batch',  type=int, default=128)
+    parser.add_argument('--lr',     type=float, default=5e-4)
+    parser.add_argument('--kl',     type=float, default=5e-3)
+    parser.add_argument('--z_ch', type=int, default=64)
+    parser.add_argument('--save',   default='./checkpoints/vae_50_v2')
+    parser.add_argument('--pretrained_path', type=str, default='None')
     args = parser.parse_args()
 
     train_vae(
@@ -146,6 +167,8 @@ if __name__ == "__main__":
         batch_size  = args.batch,
         epochs      = args.epochs,
         lr          = args.lr,
+        z_ch = args.z_ch,
         kl_beta     = args.kl,
         save_dir    = args.save,
+        pretrained_path = args.pretrained_path
     )

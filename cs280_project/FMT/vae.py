@@ -80,14 +80,19 @@ class VAE(nn.Module):
     @torch.no_grad()
     def encode_frames(self, frames):                    # (B,T,1,256,256)
         B,T = frames.shape[:2]
-        mu, _ = self.enc(frames.view(B*T,1,256,256))
+        mu, _ = self.enc(frames.reshape(B*T,1,256,256))
         return mu.view(B, T, -1)                        # (B,T,64*16*16)
 
     @torch.no_grad()
     def decode_latents(self, z_seq):                    # (B,T,64*16*16)
         B,T,_ = z_seq.shape
-        imgs = self.dec(z_seq.view(B*T,64,16,16))
+        imgs = self.dec(z_seq.reshape(B*T,64,16,16))
         return imgs.view(B, T, 1, 256, 256)
+    
+    @torch.no_grad()
+    def decode_latents_sigmoid(self, z_seq):
+        decoded_seq = self.decode_latents(z_seq)
+        return torch.nn.functional.sigmoid(decoded_seq) # (B, T, 1, 256, 256)
 
 # ----------   demo sanity check   ----------
 if __name__ == "__main__":

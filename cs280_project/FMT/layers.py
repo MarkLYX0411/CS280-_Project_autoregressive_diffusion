@@ -65,3 +65,27 @@ class FMTBlock(nn.Module):
         x = x + g_mlp * self.mlp(
                 self.modulate(self.norm2(x), s_mlp, sc_mlp))
         return x
+
+# ---------- AdaLN‑guided FMT Decoder block ----------
+
+class Decoder(nn.Module):
+    """
+    The final decoder of FlowMatchingTransformer.
+    """
+    def __init__(self, dim):
+        super().__init__()
+        self.norm_final = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(dim, 2 * dim, bias=True)
+        )
+        self.linear = nn.Linear(dim, dim, bias=True)
+
+    def forward(self, x, cond) -> torch.Tensor:
+        shift, scale = self.adaLN_modulation(cond).chunk(2, dim=-1)
+        x = self.modulate(self.norm_final(x), shift, scale)
+        return self.linear(x)
+
+    @staticmethod
+    def modulate(x, shift, scale):
+        return x * (1 + scale) + shift
